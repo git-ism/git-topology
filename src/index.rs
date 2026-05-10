@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::chunking;
-use crate::cluster::{write_cluster_map, ClusterMap};
+use crate::cluster::{is_stale, read_cluster_map, write_cluster_map, ClusterMap};
 use crate::clustering::embed_and_cluster;
 use crate::embeddings::{config::EmbeddingConfig, create_provider};
 
@@ -18,6 +19,32 @@ const IGNORED_DIRS: &[&str] = &[
 ];
 
 pub fn run_index(repo_path: &Path, config: EmbeddingConfig) -> Result<ClusterMap> {
+    if !is_stale(repo_path) {
+        return Ok(read_cluster_map(repo_path)?.unwrap_or_else(ClusterMap::empty));
+    }
+
+    let lock_path = repo_path.join(".git").join("topology.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&lock_path)
+        .context("Failed to open topology lock file")?;
+    lock_file
+        .lock_exclusive()
+        .context("Failed to acquire topology lock")?;
+
+    if !is_stale(repo_path) {
+        lock_file.unlock().ok();
+        return Ok(read_cluster_map(repo_path)?.unwrap_or_else(ClusterMap::empty));
+    }
+
+    let result = run_index_inner(repo_path, config);
+    lock_file.unlock().ok();
+    result
+}
+
+fn run_index_inner(repo_path: &Path, config: EmbeddingConfig) -> Result<ClusterMap> {
     let mut provider = create_provider(&config)?;
     provider.init()?;
 
@@ -37,10 +64,7 @@ pub fn run_index(repo_path: &Path, config: EmbeddingConfig) -> Result<ClusterMap
     let map =
         embed_and_cluster(file_texts, provider.as_mut()).context("Failed to build cluster map")?;
 
-    println!(
-        "Writing {} clusters to cognitive-clusters/v1...",
-        map.clusters.len()
-    );
+    println!("Writing {} clusters to topology/v1...", map.clusters.len());
     write_cluster_map(repo_path, &map).context("Failed to write cluster map")?;
 
     Ok(map)

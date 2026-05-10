@@ -10,9 +10,11 @@
 
 1. Walks the repository and chunks all supported source files using tree-sitter
 2. Embeds each file (Gemma local or OpenAI) and runs Leiden community detection on the similarity graph
-3. Writes the resulting clusters to a `cognitive-clusters/v1` orphan Git branch as a single `.clusters.json` file
+3. Writes the resulting clusters to a `topology/v1` orphan Git branch as `.clusters.json` alongside a `.indexed-sha` file that records the HEAD commit at index time
 
-Any tool that reads `cognitive-clusters/v1` can consume the clusters without knowing which tool wrote them. The branch is the contract.
+Any tool that reads `topology/v1` can consume the clusters without knowing which tool wrote them. The branch is the contract.
+
+`run_index` is idempotent: it compares HEAD against the stored `.indexed-sha` and skips re-clustering when no relevant source files changed. Concurrent callers are serialized via a `.git/topology.lock` exclusive lock.
 
 ---
 
@@ -21,7 +23,7 @@ Any tool that reads `cognitive-clusters/v1` can consume the clusters without kno
 ```
 git-topology index          git-topology index
        ↓                           ↓
-cognitive-clusters/v1   ←——————————→   cognitive-clusters/v1
+topology/v1   ←——————————→   topology/v1
        ↑                           ↑
 git-cognitive audit         git-semantic map
 (stamps cluster_id          (groups subsystems
@@ -55,14 +57,19 @@ git-topology = { git = "https://github.com/ccherrad/git-topology" }
 ```
 
 ```rust
-use git_topology::{run_index, read_cluster_map, EmbeddingConfig};
+use git_topology::{run_index, read_cluster_map, is_stale, EmbeddingConfig};
 use std::path::Path;
 
 let repo = Path::new(".");
 
-// build and write clusters
+// build clusters (no-op if HEAD unchanged since last index)
 let config = EmbeddingConfig::load_or_default()?;
 run_index(repo, config)?;
+
+// check staleness without triggering a full index
+if is_stale(repo) {
+    println!("clusters are out of date");
+}
 
 // read clusters (returns None if branch does not exist)
 if let Some(map) = read_cluster_map(repo)? {
@@ -80,8 +87,9 @@ if let Some(map) = read_cluster_map(repo)? {
 
 ## Cluster format
 
-Clusters are stored as JSON on the `cognitive-clusters/v1` branch:
+Two files are written to the `topology/v1` branch:
 
+**`.clusters.json`**
 ```json
 {
   "version": 1,
@@ -95,6 +103,8 @@ Clusters are stored as JSON on the `cognitive-clusters/v1` branch:
   ]
 }
 ```
+
+**`.indexed-sha`** — the full SHA of HEAD at the time of the last index run. Used by `is_stale` to skip redundant re-clustering.
 
 The `id` is a stable hash of the file membership. It does not change if the cluster is re-indexed with the same files.
 

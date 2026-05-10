@@ -118,6 +118,12 @@ fn first_line_fallback(text: &str) -> String {
         .to_string()
 }
 
+pub fn parse(src: &str, language: SupportedLanguage) -> Option<tree_sitter::Tree> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language.tree_sitter_language()).ok()?;
+    parser.parse(src, None)
+}
+
 pub fn parse_with_tree_sitter(text: &str, language: SupportedLanguage) -> Result<Vec<CodeChunk>> {
     let mut parser = Parser::new();
     let ts_language = language.tree_sitter_language();

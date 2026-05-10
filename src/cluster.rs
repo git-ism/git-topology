@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
-const TOPOLOGY_BRANCH: &str = "cognitive-clusters/v1";
+const TOPOLOGY_BRANCH: &str = "topology/v1";
 const CLUSTERS_FILE: &str = ".clusters.json";
+const INDEXED_SHA_FILE: &str = ".indexed-sha";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cluster {
@@ -39,6 +40,64 @@ impl ClusterMap {
             .iter()
             .filter(|c| files.iter().any(|f| c.contains_file(f)))
             .collect()
+    }
+}
+
+pub fn is_stale(repo_path: &Path) -> bool {
+    if !branch_exists(repo_path) {
+        return true;
+    }
+
+    let indexed_sha = read_indexed_sha(repo_path);
+    let indexed_sha = match indexed_sha {
+        Some(s) => s,
+        None => return true,
+    };
+
+    let head = Command::new("git")
+        .current_dir(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string());
+
+    let head = match head {
+        Some(s) => s,
+        None => return true,
+    };
+
+    if indexed_sha == head {
+        return false;
+    }
+
+    // Check if any source file changed between indexed sha and HEAD
+    let diff = Command::new("git")
+        .current_dir(repo_path)
+        .args(["diff", "--name-only", &indexed_sha, &head])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+
+    diff.lines()
+        .any(|f| crate::chunking::languages::detect_language(f).is_some())
+}
+
+fn read_indexed_sha(repo_path: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .current_dir(repo_path)
+        .args(["show", &format!("{}:{}", TOPOLOGY_BRANCH, INDEXED_SHA_FILE)])
+        .output()
+        .ok()?;
+
+    if out.status.success() {
+        String::from_utf8(out.stdout)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        None
     }
 }
 
@@ -80,6 +139,17 @@ pub fn write_cluster_map(repo_path: &Path, map: &ClusterMap) -> Result<()> {
     std::fs::write(worktree_path.join(CLUSTERS_FILE), json)
         .context("Failed to write cluster map")?;
 
+    let head_sha = Command::new("git")
+        .current_dir(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    std::fs::write(worktree_path.join(INDEXED_SHA_FILE), &head_sha)
+        .context("Failed to write indexed sha")?;
+
     commit_worktree(repo_path, &worktree_path, "topology: update cluster map")?;
     remove_worktree(repo_path, &worktree_path)?;
 
@@ -115,7 +185,7 @@ fn ensure_topology_branch(repo_path: &Path) -> Result<()> {
             "commit-tree",
             &tree_sha,
             "-m",
-            "init: create cognitive-clusters branch",
+            "init: create topology branch",
         ])
         .output()
         .context("Failed to create initial commit")?;
@@ -133,7 +203,7 @@ fn ensure_topology_branch(repo_path: &Path) -> Result<()> {
         .current_dir(repo_path)
         .args(["branch", TOPOLOGY_BRANCH, &commit_sha])
         .output()
-        .context("Failed to create cognitive-clusters branch")?;
+        .context("Failed to create topology branch")?;
 
     if !out.status.success() {
         anyhow::bail!(

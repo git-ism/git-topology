@@ -107,6 +107,11 @@ impl EmbeddingConfig {
         Ok(())
     }
 
+    pub fn is_provider_configured() -> bool {
+        Self::get_git_config("topology.provider").is_some()
+            || std::env::var("TOPOLOGY_PROVIDER").is_ok()
+    }
+
     pub fn load_or_default() -> Result<Self> {
         let provider_str = Self::get_git_config("topology.provider")
             .or_else(|| std::env::var("TOPOLOGY_PROVIDER").ok())

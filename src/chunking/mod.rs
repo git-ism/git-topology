@@ -1,6 +1,8 @@
 pub mod languages;
 pub mod parser;
 
+pub use parser::parse;
+
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
