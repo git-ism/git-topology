@@ -1,10 +1,11 @@
 pub mod config;
-pub mod gemma;
-pub mod openai;
+pub(crate) mod gemma;
+pub(crate) mod openai;
 
 use anyhow::Result;
 
-pub trait EmbeddingProvider: Send + Sync {
+#[allow(dead_code)]
+pub(crate) trait EmbeddingProvider: Send + Sync {
     fn generate_embedding(&mut self, text: &str) -> Result<Vec<f32>>;
     fn embedding_dimension(&self) -> usize;
     fn provider_name(&self) -> &str;
@@ -14,7 +15,9 @@ pub trait EmbeddingProvider: Send + Sync {
     }
 }
 
-pub fn create_provider(config: &config::EmbeddingConfig) -> Result<Box<dyn EmbeddingProvider>> {
+pub(crate) fn create_provider(
+    config: &config::EmbeddingConfig,
+) -> Result<Box<dyn EmbeddingProvider>> {
     match config.provider {
         config::EmbeddingProviderType::OpenAI => {
             Ok(Box::new(openai::OpenAIProvider::new(config.clone())?))

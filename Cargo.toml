@@ -1,6 +1,6 @@
 [package]
 name = "git-topology"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["CHERRAD Charef <ccherrad@gmail.com>"]
 description = "Shared clustering and topology primitives for git-cognitive and git-semantic"

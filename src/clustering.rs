@@ -10,7 +10,6 @@ pub struct FileInput {
     pub file: String,
     pub embedding: Vec<f32>,
     pub defined: HashSet<String>,
-    pub referenced: HashSet<String>,
 }
 
 pub fn build_cluster_map<F>(
@@ -72,16 +71,11 @@ pub fn embed_and_cluster(
     for (file, text) in &file_texts {
         let embedding = provider.generate_embedding(text)?;
         let mut defined = HashSet::new();
-        let mut referenced = HashSet::new();
-        extract_names(text, &mut defined, &mut referenced);
-        for name in &defined {
-            referenced.remove(name);
-        }
+        extract_names(text, &mut defined);
         inputs.push(FileInput {
             file: file.clone(),
             embedding,
             defined,
-            referenced,
         });
     }
 
@@ -242,7 +236,7 @@ fn generate_cluster_id(files: &[String]) -> String {
     format!("{:012x}", hash & 0xffffffffffff)
 }
 
-pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -252,7 +246,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - (dot / (norm_a * norm_b))
 }
 
-fn extract_names(text: &str, defined: &mut HashSet<String>, referenced: &mut HashSet<String>) {
+fn extract_names(text: &str, defined: &mut HashSet<String>) {
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
@@ -272,107 +266,7 @@ fn extract_names(text: &str, defined: &mut HashSet<String>, referenced: &mut Has
                 }
             }
         }
-
-        extract_call_references(trimmed, referenced);
     }
-}
-
-fn extract_call_references(line: &str, referenced: &mut HashSet<String>) {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if !bytes[i].is_ascii_alphabetic() && bytes[i] != b'_' {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-            i += 1;
-        }
-        let ident = &line[start..i];
-        let mut j = i;
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
-        }
-        if j < bytes.len()
-            && (bytes[j] == b'('
-                || (j + 1 < bytes.len() && bytes[j] == b':' && bytes[j + 1] == b':'))
-            && ident.len() > 2
-            && !is_keyword(ident)
-        {
-            referenced.insert(ident.to_string());
-        }
-        i = i.max(start + 1);
-    }
-}
-
-fn is_keyword(s: &str) -> bool {
-    matches!(
-        s,
-        "fn" | "let"
-            | "mut"
-            | "pub"
-            | "use"
-            | "mod"
-            | "impl"
-            | "struct"
-            | "enum"
-            | "trait"
-            | "for"
-            | "in"
-            | "if"
-            | "else"
-            | "match"
-            | "return"
-            | "self"
-            | "Self"
-            | "super"
-            | "crate"
-            | "where"
-            | "async"
-            | "await"
-            | "move"
-            | "ref"
-            | "type"
-            | "const"
-            | "static"
-            | "unsafe"
-            | "extern"
-            | "true"
-            | "false"
-            | "new"
-            | "default"
-            | "clone"
-            | "from"
-            | "into"
-            | "as_ref"
-            | "unwrap"
-            | "expect"
-            | "map"
-            | "and_then"
-            | "ok"
-            | "err"
-            | "is_empty"
-            | "len"
-            | "iter"
-            | "collect"
-            | "push"
-            | "pop"
-            | "get"
-            | "set"
-            | "insert"
-            | "remove"
-            | "contains"
-            | "None"
-            | "Some"
-            | "Ok"
-            | "Err"
-            | "def"
-            | "class"
-            | "import"
-            | "func"
-            | "var"
-    )
 }
 
 #[cfg(test)]
@@ -425,19 +319,9 @@ mod tests {
     fn extract_names_finds_definitions() {
         let text = "fn authenticate() {}\nstruct User {}\n";
         let mut defined = std::collections::HashSet::new();
-        let mut referenced = std::collections::HashSet::new();
-        extract_names(text, &mut defined, &mut referenced);
+        extract_names(text, &mut defined);
         assert!(defined.contains("authenticate"));
         assert!(defined.contains("User"));
-    }
-
-    #[test]
-    fn extract_names_skips_keywords() {
-        let text = "fn new() {}\n";
-        let mut defined = std::collections::HashSet::new();
-        let mut referenced = std::collections::HashSet::new();
-        extract_names(text, &mut defined, &mut referenced);
-        assert!(!referenced.contains("new"));
     }
 
     #[test]
@@ -453,7 +337,6 @@ mod tests {
             file: "src/main.rs".to_string(),
             embedding: vec![1.0, 0.0, 0.0],
             defined: std::collections::HashSet::new(),
-            referenced: std::collections::HashSet::new(),
         };
         let mut noop = |_: &str| -> Result<Vec<f32>> { Ok(vec![]) };
         let map = build_cluster_map(vec![input], &mut noop).unwrap();
